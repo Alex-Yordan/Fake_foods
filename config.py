@@ -1,0 +1,1 @@
+TOKEN = "8018209670:AAFVu7-VD5Mh9JeLnsq6HLzcMX2NP9DhiRQ"  # Вставь сюда свой токен

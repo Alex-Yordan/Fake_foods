@@ -3,7 +3,6 @@ import sqlite3
 import telebot
 from telebot import types
 from config import TOKEN
-import re
 
 bot = telebot.TeleBot(TOKEN)
 IMAGE_FOLDER = "images"
@@ -90,16 +89,11 @@ def show_dishes(message):
         bot.send_message(message.chat.id, "В этой категории пока нет блюд.")
 
 
-@bot.callback_query_handler(func=lambda call: re.match(r"^.+-\\d+$", call.data))
+@bot.callback_query_handler(func=lambda call: "-" in call.data)
 def handle_dish_selection(call):
     user_id = call.message.chat.id
-    match = re.match(r"^(.+)-(\\d+)$", call.data)
-    if not match:
-        bot.answer_callback_query(call.id, "Ошибка при добавлении блюда.")
-        return
-
-    dish_name = match.group(1)
-    quantity = int(match.group(2))
+    dish_name, quantity = call.data.rsplit("-", 1)
+    quantity = int(quantity)
 
     add_to_cart(user_id, dish_name, quantity)
     bot.answer_callback_query(call.id, f"✅ {dish_name} ({quantity} шт.) добавлено в корзину!")
@@ -118,43 +112,6 @@ def add_to_cart(user_id, dish_name, quantity):
         conn.commit()
 
     conn.close()
-
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("remove_one-"))
-def remove_one(call):
-    user_id = call.message.chat.id
-    dish_name = call.data.split("-")[1]
-    conn = sqlite3.connect("database.db")
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM cart WHERE user_id=? AND dish_id=(SELECT id FROM menu WHERE name=?) LIMIT 1",
-                   (user_id, dish_name))
-    conn.commit()
-    conn.close()
-    show_cart(call)
-
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("remove_all-"))
-def remove_all(call):
-    user_id = call.message.chat.id
-    dish_name = call.data.split("-")[1]
-    conn = sqlite3.connect("database.db")
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM cart WHERE user_id=? AND dish_id=(SELECT id FROM menu WHERE name=?)",
-                   (user_id, dish_name))
-    conn.commit()
-    conn.close()
-    show_cart(call)
-
-
-@bot.callback_query_handler(func=lambda call: call.data == "clear_cart")
-def clear_cart(call):
-    user_id = call.message.chat.id
-    conn = sqlite3.connect("database.db")
-    cursor = conn.cursor()
-    cursor.execute("DELETE FROM cart WHERE user_id=?", (user_id,))
-    conn.commit()
-    conn.close()
-    show_cart(call)
 
 
 bot.polling(none_stop=True)

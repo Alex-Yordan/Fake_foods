@@ -1,41 +1,56 @@
-import telebot
-import sqlite3
 import os
-
-from config import TOKEN  # Импорт токена
+import sqlite3
+import telebot
+from telebot import types
+from config import TOKEN
 
 bot = telebot.TeleBot(TOKEN)
+IMAGE_FOLDER = "images"
 
-IMAGE_FOLDER = "images"  # Папка с картинками
+# Создание таблицы корзины, если ее нет
+conn = sqlite3.connect("database.db")
+cursor = conn.cursor()
+cursor.execute("""
+    CREATE TABLE IF NOT EXISTS cart (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        dish_id INTEGER NOT NULL,
+        quantity INTEGER NOT NULL,
+        FOREIGN KEY (dish_id) REFERENCES menu (id)
+    )
+""")
+conn.commit()
+conn.close()
 
 
-# 📌 Команда /start
-@bot.message_handler(commands=['start'])
-def start(message):
-    keyboard = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
-    keyboard.add("📜 Меню", "🛒 Корзина", "✍ Отзывы")
-    bot.send_message(message.chat.id, "Добро пожаловать! Выберите действие:", reply_markup=keyboard)
-
-
-# 📌 Показ категорий блюд
-@bot.message_handler(func=lambda message: message.text == "📜 Меню")
-def show_categories(message):
+def check_category_exists(category):
+    """Проверяет, существует ли категория"""
     conn = sqlite3.connect("database.db")
     cursor = conn.cursor()
+    cursor.execute("SELECT DISTINCT category FROM menu WHERE category = ?", (category,))
+    result = cursor.fetchone()
+    conn.close()
+    return result is not None
 
+
+@bot.message_handler(commands=['start'])
+def start(message):
+    bot.send_message(message.chat.id, "Привет! Добро пожаловать в сервис заказа еды. Выберите категорию:")
+    show_categories(message)
+
+
+def show_categories(message):
+    """Отображает список категорий"""
+    conn = sqlite3.connect("database.db")
+    cursor = conn.cursor()
     cursor.execute("SELECT DISTINCT category FROM menu")
     categories = cursor.fetchall()
     conn.close()
 
-    if categories:
-        keyboard = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
-        for category in categories:
-            keyboard.add(category[0])
-        keyboard.add("🔙 Назад")  # Добавляем кнопку назад
-        bot.send_message(message.chat.id, "Выберите категорию:", reply_markup=keyboard)
-    else:
-        bot.send_message(message.chat.id, "Меню пока пустое.")
-
+    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    for category in categories:
+        keyboard.add(types.KeyboardButton(category[0]))
+    bot.send_message(message.chat.id, "Выберите категорию:", reply_markup=keyboard)
 
 
 @bot.message_handler(func=lambda message: check_category_exists(message.text))
@@ -43,52 +58,60 @@ def show_dishes(message):
     category = message.text
     conn = sqlite3.connect("database.db")
     cursor = conn.cursor()
-
-    cursor.execute("SELECT id, name, description, price, image_url FROM menu WHERE category = ?", (category,))
+    cursor.execute("SELECT name, description, price, image_url FROM menu WHERE category = ?", (category,))
     dishes = cursor.fetchall()
     conn.close()
 
     if dishes:
-        keyboard = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
-
+        keyboard = types.InlineKeyboardMarkup()
         for dish in dishes:
-            dish_name, description, price, image_filename = dish[1], dish[2], dish[3], dish[4]
-            image_path = os.path.join(IMAGE_FOLDER, image_filename)  # Полный путь к файлу
-
+            dish_name, description, price, image_filename = dish
+            image_path = os.path.join(IMAGE_FOLDER, image_filename)
             response = f"*{dish_name}*\n_{description}_\n💰 Цена: {price} ₽"
 
-            if os.path.exists(image_path):  # Проверяем, есть ли файл
+            if os.path.exists(image_path):
                 with open(image_path, "rb") as photo:
                     bot.send_photo(message.chat.id, photo, caption=response, parse_mode="Markdown")
             else:
-                bot.send_message(message.chat.id, f"❌ Ошибка: нет картинки для {dish_name}")
+                bot.send_message(message.chat.id, response, parse_mode="Markdown")
 
-            btn1 = telebot.types.KeyboardButton(f"{dish_name} - 1 шт")
-            btn2 = telebot.types.KeyboardButton(f"{dish_name} - 2 шт")
-            btn3 = telebot.types.KeyboardButton(f"{dish_name} - 3 шт")
-            keyboard.add(btn1, btn2, btn3)
+            row = [
+                types.InlineKeyboardButton(f"{dish_name}", callback_data="ignore"),
+                types.InlineKeyboardButton("🍽️", callback_data=f"{dish_name}-1"),
+                types.InlineKeyboardButton("🍽️🍽️", callback_data=f"{dish_name}-2"),
+                types.InlineKeyboardButton("🍽️🍽️🍽️", callback_data=f"{dish_name}-3")
+            ]
+            keyboard.row(*row)
 
-        keyboard.add("🔙 Назад")
+        keyboard.add(types.InlineKeyboardButton("🛒 Корзина", callback_data="cart"))
         bot.send_message(message.chat.id, "Выберите блюдо и количество:", reply_markup=keyboard)
     else:
         bot.send_message(message.chat.id, "В этой категории пока нет блюд.")
 
 
-# 📌 Обработчик кнопки "🔙 Назад"
-@bot.message_handler(func=lambda message: message.text == "🔙 Назад")
-def go_back(message):
-    show_categories(message)  # Возвращаем пользователя к выбору категории
+@bot.callback_query_handler(func=lambda call: "-" in call.data)
+def handle_dish_selection(call):
+    user_id = call.message.chat.id
+    dish_name, quantity = call.data.rsplit("-", 1)
+    quantity = int(quantity)
+
+    add_to_cart(user_id, dish_name, quantity)
+    bot.answer_callback_query(call.id, f"✅ {dish_name} ({quantity} шт.) добавлено в корзину!")
 
 
-# 📌 Проверка, существует ли категория
-def check_category_exists(category):
+def add_to_cart(user_id, dish_name, quantity):
+    """Добавляет выбранное блюдо в корзину пользователя"""
     conn = sqlite3.connect("database.db")
     cursor = conn.cursor()
-    cursor.execute("SELECT 1 FROM menu WHERE category = ?", (category,))
-    result = cursor.fetchone()
+    cursor.execute("SELECT id FROM menu WHERE name=?", (dish_name,))
+    dish = cursor.fetchone()
+
+    if dish:
+        dish_id = dish[0]
+        cursor.execute("INSERT INTO cart (user_id, dish_id, quantity) VALUES (?, ?, ?)", (user_id, dish_id, quantity))
+        conn.commit()
+
     conn.close()
-    return result is not None
 
 
-# 📌 Запуск бота
 bot.polling(none_stop=True)

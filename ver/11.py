@@ -8,7 +8,7 @@ bot = telebot.TeleBot(TOKEN)
 IMAGE_FOLDER = "images"
 
 # Создание таблицы корзины, если ее нет
-conn = sqlite3.connect("database.db")
+conn = sqlite3.connect("../database.db")
 cursor = conn.cursor()
 cursor.execute("""
     CREATE TABLE IF NOT EXISTS cart (
@@ -25,7 +25,8 @@ cursor.execute("""
         user_id INTEGER NOT NULL,
         name TEXT,
         phone TEXT,
-        order_number INTEGER
+        order_number INTEGER,
+        review TEXT
     )
 """)
 conn.commit()
@@ -34,7 +35,7 @@ conn.close()
 
 def check_category_exists(category):
     """Проверяет, существует ли категория"""
-    conn = sqlite3.connect("database.db")
+    conn = sqlite3.connect("../database.db")
     cursor = conn.cursor()
     cursor.execute("SELECT DISTINCT category FROM menu WHERE category = ?", (category,))
     result = cursor.fetchone()
@@ -63,7 +64,7 @@ def handle_start(message):
 
 def show_categories(message):
     """Отображает список категорий в InlineKeyboard"""
-    conn = sqlite3.connect("database.db")
+    conn = sqlite3.connect("../database.db")
     cursor = conn.cursor()
     cursor.execute("SELECT DISTINCT category FROM menu")
     categories = cursor.fetchall()
@@ -78,12 +79,12 @@ def show_categories(message):
 
 
 @bot.callback_query_handler(func=lambda call: call.data in [category[0] for category in
-                                                            sqlite3.connect("database.db").cursor().execute(
+                                                            sqlite3.connect("../database.db").cursor().execute(
                                                                 "SELECT DISTINCT category FROM menu").fetchall()])
 def show_dishes(call):
     """Отображает блюда из выбранной категории"""
     category = call.data
-    conn = sqlite3.connect("database.db")
+    conn = sqlite3.connect("../database.db")
     cursor = conn.cursor()
     cursor.execute("SELECT name, description, price, image_url FROM menu WHERE category = ?", (category,))
     dishes = cursor.fetchall()
@@ -124,7 +125,7 @@ def show_dishes(call):
 def show_cart(call):
     """Отображает содержимое корзины с возможностью удаления и очистки корзины"""
     user_id = call.message.chat.id
-    conn = sqlite3.connect("database.db")
+    conn = sqlite3.connect("../database.db")
     cursor = conn.cursor()
     cursor.execute("""
         SELECT menu.name, menu.price, cart.quantity, cart.id
@@ -175,7 +176,7 @@ def remove_from_cart(call):
     cart_id = int(call.data.split("_")[1])
     user_id = call.message.chat.id
 
-    conn = sqlite3.connect("database.db")
+    conn = sqlite3.connect("../database.db")
     cursor = conn.cursor()
     cursor.execute("DELETE FROM cart WHERE id = ?", (cart_id,))
     conn.commit()
@@ -190,7 +191,7 @@ def clear_cart(call):
     """Очищает корзину пользователя"""
     user_id = call.message.chat.id
 
-    conn = sqlite3.connect("database.db")
+    conn = sqlite3.connect("../database.db")
     cursor = conn.cursor()
     cursor.execute("DELETE FROM cart WHERE user_id = ?", (user_id,))
     conn.commit()
@@ -207,7 +208,7 @@ def add_to_cart(call):
     quantity = int(quantity)
     user_id = call.message.chat.id
 
-    conn = sqlite3.connect("database.db")
+    conn = sqlite3.connect("../database.db")
     cursor = conn.cursor()
     cursor.execute("SELECT id, price FROM menu WHERE name = ?", (dish_name,))
     dish = cursor.fetchone()
@@ -215,7 +216,7 @@ def add_to_cart(call):
 
     if dish:
         dish_id, price = dish
-        conn = sqlite3.connect("database.db")
+        conn = sqlite3.connect("../database.db")
         cursor = conn.cursor()
         cursor.execute("""
             INSERT INTO cart (user_id, dish_id, quantity)
@@ -241,7 +242,7 @@ def get_name(message):
     user_id = message.chat.id
     name = message.text
 
-    conn = sqlite3.connect("database.db")
+    conn = sqlite3.connect("../database.db")
     cursor = conn.cursor()
     cursor.execute("INSERT INTO customers (user_id, name) VALUES (?, ?)", (user_id, name))
     conn.commit()
@@ -255,7 +256,7 @@ def get_phone(message):
     user_id = message.chat.id
     phone = message.text
 
-    conn = sqlite3.connect("database.db")
+    conn = sqlite3.connect("../database.db")
     cursor = conn.cursor()
     cursor.execute("UPDATE customers SET phone = ? WHERE user_id = ?", (phone, user_id))
     conn.commit()
@@ -288,7 +289,7 @@ def process_payment(call):
     time.sleep(10)
 
     # Очистить корзину после оплаты
-    conn = sqlite3.connect("database.db")
+    conn = sqlite3.connect("../database.db")
     cursor = conn.cursor()
     cursor.execute("DELETE FROM cart WHERE user_id = ?", (user_id,))
     conn.commit()
@@ -312,9 +313,55 @@ def process_payment(call):
 
 @bot.callback_query_handler(func=lambda call: call.data == "leave_review")
 def leave_review(call):
-    """Запрашивает отзыв"""
+    """Запрашивает отзыв и отображает кнопки 'Отправить отзыв' и 'Без отзыва'"""
     user_id = call.message.chat.id
-    bot.send_message(user_id, "Пожалуйста, оставьте ваш отзыв.")
+    bot.send_message(user_id, "Пожалуйста, оставьте ваш отзыв.", reply_markup=types.ReplyKeyboardRemove())
+
+    # Включаем inline-кнопки "Отправить отзыв" и "Без отзыва"
+    keyboard = types.InlineKeyboardMarkup(row_width=2)
+    send_review_button = types.InlineKeyboardButton("Отправить отзыв", callback_data="send_review")
+    no_review_button = types.InlineKeyboardButton("Без отзыва", callback_data="no_review")
+    keyboard.add(send_review_button, no_review_button)
+
+    bot.send_message(user_id, "Вы можете отправить отзыв или пропустить.", reply_markup=keyboard)
 
 
-bot.polling(none_stop=True)
+@bot.callback_query_handler(func=lambda call: call.data == "send_review")
+def send_review(call):
+    """Обрабатывает отправку отзыва"""
+    user_id = call.message.chat.id
+    review_text = call.message.text
+
+    # Записываем отзыв в базу данных
+    conn = sqlite3.connect("../database.db")
+    cursor = conn.cursor()
+    cursor.execute("UPDATE customers SET review = ? WHERE user_id = ?", (review_text, user_id))
+    conn.commit()
+    conn.close()
+
+    bot.send_message(user_id, "Спасибо за ваш отзыв!")
+
+    # Отправляем кнопку 'Старт' для начала нового заказа
+    start_keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    start_button = types.KeyboardButton("Старт")
+    start_keyboard.add(start_button)
+    bot.send_message(user_id, "Нажмите 'Старт' для начала нового заказа.", reply_markup=start_keyboard)
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "no_review")
+def no_review(call):
+    """Обрабатывает ситуацию, когда пользователь не оставляет отзыв"""
+    user_id = call.message.chat.id
+
+    # Просто отправляем сообщение, что отзыв не был оставлен
+    bot.send_message(user_id, "Вы выбрали не оставлять отзыв.")
+
+    # Отправляем кнопку 'Старт' для начала нового заказа
+    start_keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    start_button = types.KeyboardButton("Старт")
+    start_keyboard.add(start_button)
+    bot.send_message(user_id, "Нажмите 'Старт' для начала нового заказа.", reply_markup=start_keyboard)
+
+
+if __name__ == '__main__':
+    bot.polling(none_stop=True)

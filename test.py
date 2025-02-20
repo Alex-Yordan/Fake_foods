@@ -1,39 +1,51 @@
 import sqlite3
 
-
-def update_database():
-    conn = sqlite3.connect('database.db')
+def update_database(db_path="database.db"):
+    conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
 
-    # Создание новой таблицы с автоинкрементным order_number
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS orders_new (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER NOT NULL,
-        name TEXT NOT NULL,
-        phone TEXT NOT NULL,
-        total_price REAL NOT NULL DEFAULT 0,  -- Устанавливаем дефолтное значение 0
-        order_number INTEGER UNIQUE
-    )""")
+    # Удаляем таблицы, которые нужно пересоздать
+    cursor.execute("DROP TABLE IF EXISTS cart")
+    cursor.execute("DROP TABLE IF EXISTS orders")
+    cursor.execute("DROP TABLE IF EXISTS customers")
 
-    # Вставляем данные только тех заказов, у которых total_price не NULL
+    # ВАЖНО: таблицу menu НЕ трогаем и НЕ удаляем, чтобы сохранить данные!
+
+    # Создаём таблицу customers (только id и user_id)
     cursor.execute("""
-    INSERT INTO orders_new (user_id, name, phone, total_price)
-    SELECT user_id, name, phone, total_price 
-    FROM orders 
-    WHERE total_price IS NOT NULL
+        CREATE TABLE customers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL
+        )
     """)
 
-    # Удаление старой таблицы
-    cursor.execute("DROP TABLE orders")
+    # Создаём таблицу orders
+    cursor.execute("""
+        CREATE TABLE orders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            customer_id INTEGER NOT NULL,
+            name TEXT,
+            phone TEXT,
+            review TEXT,
+            FOREIGN KEY (customer_id) REFERENCES customers(id)
+        )
+    """)
 
-    # Переименование новой таблицы в orders
-    cursor.execute("ALTER TABLE orders_new RENAME TO orders")
+    # Создаём таблицу cart
+    cursor.execute("""
+        CREATE TABLE cart (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            dish_id INTEGER NOT NULL,
+            quantity INTEGER NOT NULL,
+            FOREIGN KEY (dish_id) REFERENCES menu(id)
+        )
+    """)
 
-    # Применяем изменения
     conn.commit()
     conn.close()
 
-
-# Запуск функции для обновления базы данных
-update_database()
+if __name__ == "__main__":
+    update_database("database.db")
+    print("База данных успешно обновлена!\n"
+          "Таблица menu сохранена, а таблицы customers, orders, cart пересозданы.")
